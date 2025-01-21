@@ -74,3 +74,76 @@ def main():
 # Trigger the main function
 if __name__ == "__main__":
     main()
+
+
+---
+
+from pyspark.sql.functions import udf
+from pyspark.sql.types import StringType
+import google.auth
+from google.cloud import secretmanager_v1
+import base64
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import hashes, serialization
+
+# Step 1: Fetch the PEM from Secrets Manager
+def get_pem_from_secrets_manager(secret_id, project_id):
+    client = secretmanager_v1.SecretManagerServiceClient()
+    secret_name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
+    response = client.access_secret_version(request={"name": secret_name})
+    return response.payload.data
+
+# Step 2: Load the PEM content as an RSA private key
+def load_private_key(pem_content):
+    private_key = serialization.load_pem_private_key(
+        pem_content,
+        password=None,
+    )
+    return private_key
+
+# Step 3: Define a UDF for decryption
+def decrypt_udf(encrypted_value, private_key):
+    try:
+        decrypted_value = private_key.decrypt(
+            base64.b64decode(encrypted_value),
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        return decrypted_value.decode('utf-8')
+    except Exception as e:
+        return None  # Handle decryption errors gracefully
+
+# Main Dataproc Job Logic
+def main():
+    # Parameters
+    secret_id = "your-secret-id"  # The ID of your secret in Secrets Manager
+    project_id = "your-project-id"  # Google Cloud project ID
+
+    # Fetch the PEM from Secrets Manager
+    pem_content = get_pem_from_secrets_manager(secret_id, project_id)
+    private_key = load_private_key(pem_content)
+
+    # Initialize Spark session
+    from pyspark.sql import SparkSession
+    spark = SparkSession.builder.appName("Secure PEM Decryption").getOrCreate()
+
+    # Read the encrypted DataFrame
+    df = spark.read.format("parquet").load("path/to/encrypted/dataframe")
+
+    # Register UDF for decryption
+    decrypt = udf(lambda x: decrypt_udf(x, private_key), StringType())
+    df_decrypted = df.withColumn("decrypted_column", decrypt(df["encrypted_column"]))
+
+    # Show or save the decrypted data
+    df_decrypted.show()
+
+    # Optionally save the decrypted DataFrame
+    # df_decrypted.write.format("parquet").save("path/to/decrypted/output")
+
+# Trigger the main function
+if __name__ == "__main__":
+    main()
+
