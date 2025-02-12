@@ -80,3 +80,6 @@ SELECT
         PARTITION BY INFORM_DATE, INFORM_HR, DEVICE_ID
     ) AS MAX_REBOOT_COUNT
 FROM reboot_counts;
+
+
+# REGEXP_CONTAINS(uptime, r'^\d{4} \d{2}:\d{2}:\d{2}$')
