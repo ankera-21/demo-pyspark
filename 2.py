@@ -83,3 +83,53 @@ FROM reboot_counts;
 
 
 # REGEXP_CONTAINS(uptime, r'^\d{4} \d{2}:\d{2}:\d{2}$')
+
+===
+
+
+-- Fixed Version Handling Invalid Numeric Values
+WITH validated_data AS (
+    SELECT 
+        *, 
+        -- Validate uptime format before processing
+        IF(REGEXP_CONTAINS(uptime, r'^\d{4} \d{2}:\d{2}:\d{2}$'), uptime, NULL) AS valid_uptime
+    FROM df_tbl
+),
+parsed_data AS (
+    SELECT
+        *,
+        TIMESTAMP_SUB(
+            TIMESTAMP_SUB(
+                TIMESTAMP_SUB(
+                    TIMESTAMP_SUB(
+                        INFORM_TIME, 
+                        INTERVAL COALESCE(SAFE_CAST(SPLIT(valid_uptime, ' ')[0] AS INT64), 0) DAY
+                    ), 
+                    INTERVAL COALESCE(SAFE_CAST(SPLIT(SPLIT(valid_uptime, ' ')[1], ':')[0] AS INT64), 0) HOUR
+                ), 
+                INTERVAL COALESCE(SAFE_CAST(SPLIT(SPLIT(valid_uptime, ' ')[1], ':')[1] AS INT64), 0) MINUTE
+            ), 
+            INTERVAL COALESCE(SAFE_CAST(SPLIT(SPLIT(valid_uptime, ' ')[1], ':')[2] AS INT64), 0) SECOND
+        ) AS REBOOT_TIME
+    FROM validated_data
+    WHERE valid_uptime IS NOT NULL
+),
+reboot_counts AS (
+    SELECT
+        *,
+        COUNT(DISTINCT REBOOT_TIME) OVER (
+            PARTITION BY INFORM_DATE, INFORM_HR, DEVICE_ID
+        ) AS REBOOT_COUNT
+    FROM parsed_data
+),
+final_counts AS (
+    SELECT
+        *,
+        CASE WHEN uptime LIKE '0000 00%' THEN REBOOT_COUNT ELSE 0 END AS ADJ_REBOOT_COUNT,
+        MAX(CASE WHEN uptime LIKE '0000 00%' THEN REBOOT_COUNT ELSE 0 END) OVER (
+            PARTITION BY INFORM_DATE, INFORM_HR, DEVICE_ID
+        ) AS MAX_REBOOT_COUNT
+    FROM reboot_counts
+)
+SELECT * FROM final_counts;
+
